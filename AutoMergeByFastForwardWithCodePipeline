@@ -1,0 +1,151 @@
+from __future__ import print_function
+from boto3.session import Session
+
+import json
+import boto3
+import botocore
+import traceback
+
+client = boto3.client('codecommit')
+code_pipeline = boto3.client('codepipeline')
+
+# Retrieve pipeline execution ID by job id.
+def get_job_detail(jobId):
+    response = code_pipeline.get_job_details(
+        jobId=jobId
+    )
+    return response['jobDetails']['data']['pipelineContext']['pipelineExecutionId']
+
+# Retrieve commit ID by pipeline execution ID.
+def get_pipeline_state(pipelineName, pipelineExecutionId):
+    response = code_pipeline.get_pipeline_execution(
+        pipelineName=pipelineName,
+        pipelineExecutionId=pipelineExecutionId
+    )
+    commitId=''
+    for artifactRevisions in response['pipelineExecution']['artifactRevisions']:
+        commitId=artifactRevisions['revisionId']
+        break
+    return commitId
+
+# Retrieve commit ID of target by repository name and branch name.
+def get_branch(repositoryName, targetBranch):
+    response = client.get_branch(
+        repositoryName=repositoryName,
+        branchName=targetBranch
+    )
+    return response['branch']['commitId']
+
+# Merge by fast forward
+def merge_branches_by_fast_forward(repositoryName, sourceCommitId, destinationCommitId, targetBranch):
+    response = client.merge_branches_by_fast_forward(
+        repositoryName=repositoryName,
+        sourceCommitSpecifier=sourceCommitId,
+        destinationCommitSpecifier=destinationCommitId,
+        targetBranch=targetBranch
+    )
+
+# Update Code Pipeline Status: Success
+def put_job_success(job, message):
+    """
+    Notify CodePipeline of a successful job
+    Args:
+        job: The CodePipeline job ID
+        message: A message to be logged relating to the job status
+    Raises:
+        Exception: Any exception thrown by .put_job_success_result()
+    """
+    print('Putting job success')
+    print(message)
+    code_pipeline.put_job_success_result(jobId=job)
+
+# Update Code Pipeline Status: Fail
+def put_job_failure(job, message):
+    """
+    Notify CodePipeline of a failed job
+    Args:
+        job: The CodePipeline job ID
+        message: A message to be logged relating to the job status
+    Raises:
+        Exception: Any exception thrown by .put_job_failure_result()
+    """
+    print('Putting job failure')
+    print(message)
+    code_pipeline.put_job_failure_result(jobId=job, failureDetails={'message': message, 'type': 'JobFailed'})
+
+# Parse user data from input parameters
+def get_user_params(job_data):
+    """
+    Decodes the JSON user parameters and validates the required properties.
+    Args:
+        job_data: The job data structure containing the UserParameters string which should be a valid JSON structure
+    Returns:
+        The JSON parameters decoded as a dictionary.
+    Raises:
+        Exception: The JSON can't be decoded or a property is missing.
+    """
+    try:
+        user_parameters = job_data['actionConfiguration']['configuration']['UserParameters']
+        decoded_parameters = json.loads(user_parameters)
+        
+        return decoded_parameters
+    
+     except Exception as e:
+        # We're expecting the user parameters to be encoded as JSON
+        # so we can pass multiple values. If the JSON can't be decoded
+        # then fail the job with a helpful message.
+        raise Exception('UserParameters could not be decoded as JSON')
+
+    if 'pipelineName' not in decoded_parameters:
+        # Validate that the appname is provided, otherwise fail the job
+        # with a helpful message.
+        raise Exception('Your UserParameters JSON must include the pipelineName')
+        
+    if 'repositoryName' not in decoded_parameters:
+        # Validate that the appname is provided, otherwise fail the job
+        # with a helpful message.
+        raise Exception('Your UserParameters JSON must include the repositoryName')
+        
+    if 'branchName' not in decoded_parameters:
+        # Validate that the appname is provided, otherwise fail the job
+        # with a helpful message.
+        raise Exception('Your UserParameters JSON must include the branchName')
+
+# Lamdda main function
+def lambda_handler(event, context):
+    """
+    The Lambda function handler
+
+    Args:
+        event: The event passed by Lambda
+        context: The context passed by Lambda
+    """
+    job_id = event['CodePipeline.job']['id']        # Extract the Job ID
+    job_data = event['CodePipeline.job']['data']    # Extract the Job Data
+    params = get_user_params(job_data)              # Extract the params
+    pipelineName=params['pipelineName']
+    repositoryName=params['repositoryName']
+    branchName=params['branchName']
+
+    try:
+        
+        pipelineExecutionId=get_job_detail(job_id)
+        sourceCommitId=get_pipeline_state(pipelineName, pipelineExecutionId)
+        
+        destinationCommitId=get_branch(repositoryName, branchName)
+        merge_branches_by_fast_forward(repositoryName, sourceCommitId, destinationCommitId, branchName)
+        
+    except Exception as e:
+        # If any other exceptions which we didn't expect are raised
+        # then fail the job and log the exception message.
+        print('Function failed due to exception.')
+        print(e)
+        traceback.print_exc()
+        put_job_failure(job_id, 'Function exception: ' + str(e))
+
+        print('Function complete.')
+        return False
+
+    # Update pipeline state
+    put_job_success(job_id, 'Merge is success.')
+    return True
