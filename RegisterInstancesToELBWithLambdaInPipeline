@@ -1,0 +1,312 @@
+from botocore.exceptions import ClientError
+
+import json
+import boto3
+import traceback
+
+ec2 = boto3.client('ec2')
+elbv2client = boto3.client('elbv2')
+code_pipeline = boto3.client('codepipeline')
+
+'''
+    ALB Management Lambda for Codepipeline
+    Ver: 1.0
+'''
+def get_ec2_filters(tags, states=['running']):
+    """
+    Extract the Instance Filtering Conditions
+    
+    Args:
+        params: {
+            appname : Application Name [sfmb|sfpc|gfmb|gfpc|trypc|trymb|thbpc|if|bo|po|pd|bt|...]
+            apptype : Application Type [app|content]
+            env     : Environment[dev|stg|prd_1|...]
+            subnetid: Instance Subnet
+        }
+    """
+    filters = [
+        {'Name': 'tag:AppName','Values': tags['appname']},
+        {'Name': 'tag:AppType','Values': tags['apptype']},
+        {'Name': 'tag:Env','Values': tags['env']},
+        {'Name': 'instance-state-name','Values': states}
+    ]
+    return filters
+    
+def get_instance_ids(filters):
+    """
+    Get instance ids by tags
+    """
+    instance_ids = []
+    instance_ips = []
+    try:
+        response = ec2.describe_instances(
+            Filters=filters
+        )
+        print(response)
+        if response['Reservations']:
+            for reservation in response['Reservations']:
+                instances = reservation['Instances']
+                for instance in instances:
+                    instance_ids.append(instance['InstanceId'])
+                    instance_ips.append(instance['PrivateIpAddress'])
+        return instance_ids, instance_ips
+    except Exception as e:
+        return instance_ids, instance_ips
+
+def target_group_list(elb_tg_conf_list, ec2_filter):
+    target_list = []
+    """
+    Args:
+        elb_tg_conf_list: [{
+            tgname,     # Target group Name
+            tgport,     # Target group Port
+            tgaz        # Target group Availability Zone
+        }],
+        ec2_filter: [{
+            Name,
+            Value
+        }]
+    Return:
+        [{
+            Arn,
+            Targets: [{
+                Id,
+                port,
+                AvailabilityZone
+            }]
+        }]
+    """
+    # Get Instance ids
+    instance_ids, instance_ips = get_instance_ids(ec2_filter)
+    
+    for tg_conf in elb_tg_conf_list:
+        target_info = []
+        # Get Target group's ARN and Type
+        target_arn, target_type = describe_target_groups(tg_conf['tgname'])
+        # Get Target group configuration
+        if target_type == 'instance':
+            target_info = target_group_conf_list(instance_ids, int(tg_conf['tgport']), tg_conf['tgaz'])
+        else:
+            target_info = target_group_conf_list(instance_ips, 0, '', target_type)
+        # Set Target group infomation for deregister/register
+        target = { 
+            'Arn': target_arn,
+            'Targets': target_info
+        }
+        target_list.append(target)
+
+    return target_list
+
+def target_group_conf_list(id_list, port, az, type='instance'):
+    """
+    Render a list of targets for registration
+
+    Args:
+        id_list: list of instance's id
+        port: ALB target port
+        az: AvailabilityZone
+        type: target type [instance|ip|lambda]
+
+    Returns:
+        Target group list as a JSON array.
+    """
+    target_list = []
+    target = {}
+    for id in id_list:
+        if type == 'instance':
+            target = {'Id': id, 'Port': port, 'AvailabilityZone': az}
+        else:
+            target = {'Id': id}
+        target_list.append(target)
+    return target_list
+
+def deregister_target(tg_arn, target_list):
+    """
+    Deregister ALB's Instance from NLB's target group
+    Args:
+        tg_arn: ALB's target arn
+        target_list: Instances
+    """
+    print "INFO: Deregistering targets: {}".format(target_list)
+    try:
+        elbv2client.deregister_targets(
+            TargetGroupArn=tg_arn,
+            Targets=target_list
+        )
+    except ClientError as e:
+        print e.response['Error']['Message']
+
+def register_target(tg_arn, target_list):
+    """
+    Register ALB's IP to NLB's target group
+    Args:
+        tg_arn: ALB's target arn
+        target_list: Instances
+    """
+    print "INFO: Register new_target_list:{}".format(target_list)
+    try:
+        elbv2client.register_targets(
+            TargetGroupArn=tg_arn,
+            Targets=target_list
+        )
+    except ClientError as e:
+        print e.response['Error']['Message']
+
+def is_registered_target(tg_arn, target):
+    """
+    Verify that the instance is registered with the ALB.
+    """
+    try:
+        response = elbv2client.describe_target_health(
+            TargetGroupArn=tg_arn,
+            Targets=target
+        )
+        for target in response['TargetHealthDescriptions']:
+            reason = target['TargetHealth']['Reason']
+            if reason in ('Target.NotRegistered'):
+                return False
+            else:
+                return True
+    except ClientError as e:
+        print e.response['Error']['Message']
+
+def describe_target_groups(tg_name):
+    """
+    Get the ARN of ALB's target group by the name.
+    Args:
+        name: target group's name
+    Returns:
+        Arn, Type[instance|ip|lambda]
+    """
+    try:
+        response = elbv2client.describe_target_groups(
+            Names=[tg_name]
+        )
+        return response['TargetGroups'][0]['TargetGroupArn'], response['TargetGroups'][0]['TargetType']
+    except ClientError as e:
+        raise e
+
+def put_job_success(job, message):
+    """
+    Notify CodePipeline of a successful job
+    Args:
+        job: The CodePipeline job ID
+        message: A message to be logged relating to the job status
+    Raises:
+        Exception: Any exception thrown by .put_job_success_result()
+    """
+    print('Putting job success')
+    print(message)
+    code_pipeline.put_job_success_result(jobId=job)
+
+def put_job_failure(job, message):
+    """
+    Notify CodePipeline of a failed job
+    Args:
+        job: The CodePipeline job ID
+        message: A message to be logged relating to the job status
+    Raises:
+        Exception: Any exception thrown by .put_job_failure_result()
+    """
+    print('Putting job failure')
+    print(message)
+    code_pipeline.put_job_failure_result(jobId=job, failureDetails={'message': message, 'type': 'JobFailed'})
+
+def get_user_params(job_data):
+    """
+    Decodes the JSON user parameters and validates the required properties.
+    Args:
+        job_data: The job data structure containing the UserParameters string which should be a valid JSON structure
+    Returns:
+        The JSON parameters decoded as a dictionary.
+    Raises:
+        Exception: The JSON can't be decoded or a property is missing.
+    """
+    try:
+        # Get the user parameters which contain the stack, artifact and file settings
+        user_parameters = job_data['actionConfiguration']['configuration']['UserParameters']
+        decoded_parameters = json.loads(user_parameters)
+
+    except Exception as e:
+        # We're expecting the user parameters to be encoded as JSON
+        # so we can pass multiple values. If the JSON can't be decoded
+        # then fail the job with a helpful message.
+        raise Exception('UserParameters could not be decoded as JSON')
+
+    if 'appname' not in decoded_parameters:
+        # Validate that the appname is provided, otherwise fail the job
+        # with a helpful message.
+        raise Exception('Your UserParameters JSON must include the appname')
+
+    if 'apptype' not in decoded_parameters:
+        # Validate that the apptype is provided, otherwise fail the job
+        # with a helpful message.
+        raise Exception('Your UserParameters JSON must include the apptype')
+
+    if 'env' not in decoded_parameters:
+        # Validate that the env is provided, otherwise fail the job
+        # with a helpful message.
+        raise Exception('Your UserParameters JSON must include the env')
+
+    if 'subnetid' not in decoded_parameters:
+        # Validate that the subnetid is provided, otherwise fail the job
+        # with a helpful message.
+        raise Exception('Your UserParameters JSON must include the subnetid')
+        
+    if 'optype' not in decoded_parameters:
+        # Validate that the ALB's target group operation type is provided, otherwise fail the job
+        # with a helpful message.
+        raise Exception('Your UserParameters JSON must include the optype')
+        
+    if 'elb' not in decoded_parameters:
+        # Validate that the ELB's target informations is provided, otherwise fail the job
+        # with a helpful message.
+        raise Exception('Your UserParameters JSON must include the elb''s informations')
+
+    return decoded_parameters
+
+def lambda_handler(event, context):
+    """
+    The Lambda function handler
+
+    Args:
+        event: The event passed by Lambda
+        context: The context passed by Lambda
+    """
+    try:
+        job_id = event['CodePipeline.job']['id']        # Extract the Job ID
+        job_data = event['CodePipeline.job']['data']    # Extract the Job Data
+        params = get_user_params(job_data)              # Extract the params
+        
+        # Extract the ALB Target Group Filtering Conditions
+        optype = params['optype']                       # Operation type[DEREGISTER|REGISTER]
+        elb_tg_conf_list = params['elb']                # elb target group configuration
+        
+        # Get Filters for EC2 Instance Discovery
+        ec2_filter = get_ec2_filters(params)
+        
+        # Get Target group list
+        target_list = target_group_list(elb_tg_conf_list, ec2_filter)
+
+        for target in target_list:
+            # Unregister Instances from Target Group
+            if optype == 'DEREGISTER':
+                deregister_target(target['Arn'], target['Targets'])
+            elif optype == 'REGISTER':
+                register_target(target['Arn'], target['Targets'])
+            else:
+                raise Exception('Not suppoted operation')
+    except Exception as e:
+        # If any other exceptions which we didn't expect are raised
+        # then fail the job and log the exception message.
+        print('Function failed due to exception.')
+        print(e)
+        traceback.print_exc()
+        put_job_failure(job_id, 'Function exception: ' + str(e))
+
+        print('Function complete.')
+        return False
+
+    # Update pipeline state
+    put_job_success(job_id, 'Deregistering instances from the target group is success.')
+    return True
