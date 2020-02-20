@@ -18,9 +18,9 @@ def get_ec2_filters(tags, states=['running']):
     
     Args:
         params: {
-            appname : Application Name [sfmb|sfpc|gfmb|gfpc|trypc|trymb|thbpc|if|bo|po|pd|bt|...]
-            apptype : Application Type [app|content]
-            env     : Environment[dev|stg|prd_1|...]
+            appname : Application Name [app|...]
+            apptype : Application Type [was|web]
+            env     : Environment[dev|stg|prd|...]
             subnetid: Instance Subnet
         }
     """
