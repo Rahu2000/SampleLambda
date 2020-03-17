@@ -49,9 +49,9 @@ def get_instance_ids(filters):
                 for instance in instances:
                     instance_ids.append(instance['InstanceId'])
                     instance_ips.append(instance['PrivateIpAddress'])
-        return instance_ids, instance_ips
     except Exception as e:
-        return instance_ids, instance_ips
+        print(e)
+    return instance_ids, instance_ips
 
 def target_group_list(elb_tg_conf_list, ec2_filter):
     target_list = []
@@ -127,14 +127,14 @@ def deregister_target(tg_arn, target_list):
         tg_arn: ALB's target arn
         target_list: Instances
     """
-    print "INFO: Deregistering targets: {}".format(target_list)
+    print("INFO: Deregistering targets: {}".format(target_list))
     try:
         elbv2client.deregister_targets(
             TargetGroupArn=tg_arn,
             Targets=target_list
         )
     except ClientError as e:
-        print e.response['Error']['Message']
+        print(e.response['Error']['Message'])
 
 def register_target(tg_arn, target_list):
     """
@@ -150,7 +150,7 @@ def register_target(tg_arn, target_list):
             Targets=target_list
         )
     except ClientError as e:
-        print e.response['Error']['Message']
+        print(e.response['Error']['Message'])
 
 def is_registered_target(tg_arn, target):
     """
@@ -168,7 +168,7 @@ def is_registered_target(tg_arn, target):
             else:
                 return True
     except ClientError as e:
-        print e.response['Error']['Message']
+        print(e.response['Error']['Message'])
 
 def describe_target_groups(tg_name):
     """
