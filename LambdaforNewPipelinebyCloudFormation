@@ -8,167 +8,169 @@ commitClient = boto3.client('codecommit')
 cfClient = boto3.client('cloudformation')
 
 '''
-  Create new branch
-  args:
-    repoName        - target codecommit repository name
-    newBranchName   - new branch name
-    commitId        - target commit id
-  return:
-    void
+    Create new branch
+    args:
+        repoName        - target codecommit repository name
+        newBranchName   - new branch name
+        commitId        - target commit id
+    return:
+        void
 '''
 def create_branch(repoName, newBranchName, commitId):
-  try:
-    response = commitClient.create_branch(
-      repositoryName = repoName,
-      branchName = newBranchName,
-      commitId = commitId
-    )
-  except Exception as e:
-    print('create branch is failed.')
-    raise e
+    try:
+        response = commitClient.create_branch(
+            repositoryName = repoName,
+            branchName = newBranchName,
+            commitId = commitId
+        )
+    except Exception as e:
+        print('create branch is failed.')
+        raise e
 
 '''
-  Get the latest commit id from master branch
-  args:
-    repoName        - target codecommit repository name
-  return:
-    the latest commit id
+    Get the latest commit id from master branch
+    args:
+        repoName        - target codecommit repository name
+    return:
+        the latest commit id
 '''
 def get_master_commitId(repoName):
-  try:
-    response = commitClient.get_branch(
-      repositoryName = repoName,
-      branchName = 'master'
-    )
-    # return the latest commit id
-    return response['branch']['commitId']
-  except Exception as e:
-    print('get commit id is failed.')
-    raise e
+    try:
+        response = commitClient.get_branch(
+            repositoryName = repoName,
+            branchName = 'master'
+        )
+        # return the latest commit id
+        return response['branch']['commitId']
+    except Exception as e:
+        print('get commit id is failed.')
+        raise e
 
 '''
-  Create new pipeline
-  args:
-    stackName       - stack name
-    templateURL     - stack template url
-    repoName        - target codecommit repository name
-    newBranchName   - new branch name
-    codeDeployRole  - IAM role for CodeDeploy
-    codePipelineRole- IAM role for CodePipeline
-    bucket          - S3 bucket for CodePipeline
-  return:
-    void
+    Create new pipeline
+    args:
+        stackName       - stack name
+        templateURL     - stack template url
+        repoName        - target codecommit repository name
+        newBranchName   - new branch name
+        codeDeployRole  - IAM role for CodeDeploy
+        codePipelineRole- IAM role for CodePipeline
+        bucket          - S3 bucket for CodePipeline
+    return:
+        void
 '''
 def create_stack(stackName, templateURL, repoName, newBranchName, codeDeployRole, codePipelineRole, bucket):
-  try:
-    response = cfClient.create_stack(
-      StackName = stackName,
-      TemplateURL = templateURL,
-      Parameters = [
-        {
-          'ParameterKey': 'RepositoryName',
-          'ParameterValue': repoName
-        },
-        {
-          'ParameterKey': 'BranchName',
-          'ParameterValue': newBranchName
-        },
-        {
-          'ParameterKey': 'CodeDeployServiceRole',
-          'ParameterValue': codeDeployRole
-        },
-        {
-          'ParameterKey': 'CodePipelineServiceRole',
-          'ParameterValue': codePipelineRole
-        },
-        {
-          'ParameterKey': 'CodePipelineArtifactStoreBucket',
-          'ParameterValue': bucket
-        },
-      ],
-      TimeoutInMinutes = 300,
-      Capabilities = ['CAPABILITY_NAMED_IAM'],
-      RoleARN = CLOUDFORMATION_SERVICE_ROLE_ARN,
-      Tags=[
-        {
-          'Key': 'Name',
-          'Value': stackName
-        }
-      ]
-    )
-  except Exception as e:
-    print('create stack is failed.')
-    raise e
+    try:
+        response = cfClient.create_stack(
+            StackName = stackName,
+            TemplateURL = templateURL,
+            Parameters = [
+                {
+                    'ParameterKey': 'RepositoryName',
+                    'ParameterValue': repoName
+                },
+                {
+                    'ParameterKey': 'BranchName',
+                    'ParameterValue': newBranchName
+                },
+                {
+                    'ParameterKey': 'CodeDeployServiceRole',
+                    'ParameterValue': codeDeployRole
+                },
+                {
+                    'ParameterKey': 'CodePipelineServiceRole',
+                    'ParameterValue': codePipelineRole
+                },
+                {
+                    'ParameterKey': 'CodePipelineArtifactStoreBucket',
+                    'ParameterValue': bucket
+                },
+            ],
+            TimeoutInMinutes = 300,
+            Capabilities = ['CAPABILITY_NAMED_IAM'],
+            RoleARN = CLOUDFORMATION_SERVICE_ROLE_ARN,
+            Tags=[
+                {
+                    'Key': 'Name',
+                    'Value': stackName
+                }
+            ]
+        )
+    except Exception as e:
+        print('create stack is failed.')
+        raise e
 
 def validate_user_params(job_data):
-  '''
-  Decodes the JSON user parameters and validates the required properties.
-  Args:
-      job_data: The job data structure containing the UserParameters string which should be a valid JSON structure
-  Raises:
-      Exception: The JSON can't be decoded or a property is missing.
-  '''
-  for job in job_data:
+    '''
+    Decodes the JSON user parameters and validates the required properties.
+    Args:
+        job_data: The job data structure containing the UserParameters string which should be a valid JSON structure
+    Raises:
+        Exception: The JSON can't be decoded or a property is missing.
+    '''
     if 'stackName' not in job:
-      # Validate that the stack name is provided, otherwise fail the job
-      # with a helpful message.
-      raise Exception('Your UserParameters JSON must include the stackName')
+        # Validate that the stack name is provided, otherwise fail the job
+        # with a helpful message.
+        raise Exception('Your UserParameters JSON must include the stackName')
 
     if 'templateURL' not in job:
-      # Validate that the template url is provided, otherwise fail the job
-      # with a helpful message.
-      raise Exception('Your UserParameters JSON must include the templateURL')
-      
+        # Validate that the template url is provided, otherwise fail the job
+        # with a helpful message.
+        raise Exception('Your UserParameters JSON must include the templateURL')
+
     if 'newBranch' not in job:
-      # Validate that the new branch name is provided, otherwise fail the job
-      # with a helpful message.
-      raise Exception('Your UserParameters JSON must include the newBranch')
-  
+        # Validate that the new branch name is provided, otherwise fail the job
+        # with a helpful message.
+        raise Exception('Your UserParameters JSON must include the newBranch')
+
     if 'repository' not in job:
-      # Validate that the repositoryName is provided, otherwise fail the job
-      # with a helpful message.
-      raise Exception('Your UserParameters JSON must include the repository')
-  
+        # Validate that the repositoryName is provided, otherwise fail the job
+        # with a helpful message.
+        raise Exception('Your UserParameters JSON must include the repository')
+
     if 'codeDeployRole' not in job:
-      # Validate that the codeDeployRole is provided, otherwise fail the job
-      # with a helpful message.
-      raise Exception('Your UserParameters JSON must include the codeDeployRole')
-  
+        # Validate that the codeDeployRole is provided, otherwise fail the job
+        # with a helpful message.
+        raise Exception('Your UserParameters JSON must include the codeDeployRole')
+
     if 'codePipelineRole' not in job:
-      # Validate that the codePipelineRole is provided, otherwise fail the job
-      # with a helpful message.
-      raise Exception('Your UserParameters JSON must include the codePipelineRole')
-        
+        # Validate that the codePipelineRole is provided, otherwise fail the job
+        # with a helpful message.
+        raise Exception('Your UserParameters JSON must include the codePipelineRole')
+
     if 's3bucket' not in job:
-      # Validate that the s3bucket is provided, otherwise fail the job
-      # with a helpful message.
-      raise Exception('Your UserParameters JSON must include the s3bucket')
+        # Validate that the s3bucket is provided, otherwise fail the job
+        # with a helpful message.
+        raise Exception('Your UserParameters JSON must include the s3bucket')
 
 def lambda_handler(event, context):
-  try:
-    # Validate event parameters
-    validate_user_params(event)
 
-    stackName         = event['stackName']
-    templateURL       = event['templateURL']
-    repoName          = event['repository']
-    newBranchName     = event['newBranch']
-    codeDeployRole    = event['codeDeployRole']
-    codePipelineRole  = event['codeDeployRole']
-    bucketName        = event['s3bucket']
+    print(event)
 
-    # Get commit id from master branch
-    commitId = get_master_commitId(repoName)
+    try:
+        # Validate event parameters
+        validate_user_params(event)
 
-    # Create branch with new branch name
-    create_branch(repoName, newBranchName, commitId)
+        stackName         = event['stackName']
+        templateURL       = event['templateURL']
+        repoName          = event['repository']
+        newBranchName     = event['newBranch']
+        codeDeployRole    = event['codeDeployRole']
+        codePipelineRole  = event['codePipelineRole']
+        bucketName        = event['s3bucket']
 
-    # Create new pipeline stack
-    create_stack(stackName, templateURL, repoName, newBranchName, codeDeployRole, codePipelineRole, bucketName)
+        # Get commit id from master branch
+        commitId = get_master_commitId(repoName)
 
-  except Exception as e:
-    # If any other exceptions which we didn't expect are raised
-    # then fail the job and log the exception message.
-    print('Function failed due to exception.')
-    print(e)
-    traceback.print_exc()
+        # Create branch with new branch name
+        create_branch(repoName, newBranchName, commitId)
+
+        # Create new pipeline stack
+        create_stack(stackName, templateURL, repoName, newBranchName, codeDeployRole, codePipelineRole, bucketName)
+
+    except Exception as e:
+        # If any other exceptions which we didn't expect are raised
+        # then fail the job and log the exception message.
+        print('Function failed due to exception.')
+        print(e)
+        traceback.print_exc()
